@@ -1,7 +1,7 @@
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import altair as alt
 
 st.title("渠道销售分析数据看板")
 
@@ -44,8 +44,14 @@ df_daily = df_filtered[df_filtered['channel'] == selected_channel].groupby('date
 }).reset_index()
 df_daily['ROI'] = df_daily['gmv'] / df_daily['cost']
 
-fig = px.line(df_daily, x='date', y=['uv', 'gmv', 'ROI'], title=f"每日趋势 - {selected_channel}")
-st.plotly_chart(fig)
+df_melted = df_daily.melt(id_vars='date', value_vars=['uv', 'gmv', 'ROI'], var_name='指标', value_name='值')
+chart = alt.Chart(df_melted).mark_line().encode(
+    x='date:T',
+    y='值:Q',
+    color='指标:N',
+    tooltip=['date:T', '指标:N', '值:Q']
+).properties(title=f"每日趋势 - {selected_channel}", width=700)
+st.altair_chart(chart, use_container_width=True)
 
 # Top10 ROI 产品
 st.subheader("Top10 ROI产品")
@@ -59,8 +65,12 @@ st.dataframe(top10)
 
 # GMV 占比图
 st.subheader("渠道GMV占比")
-fig2 = px.pie(channel_summary, values='GMV占比', names='channel', title='渠道GMV占比')
-st.plotly_chart(fig2)
+pie_chart = alt.Chart(channel_summary).mark_arc().encode(
+    theta='GMV占比:Q',
+    color='channel:N',
+    tooltip=['channel', 'GMV占比']
+)
+st.altair_chart(pie_chart, use_container_width=True)
 
 # 拓展功能：渠道+品类组合分析
 df_filtered['category'] = df_filtered['product_name'].apply(lambda x: x.split("_")[0] if '_' in x else 'Unknown')
