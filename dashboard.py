@@ -1,11 +1,24 @@
-
 import streamlit as st
 import pandas as pd
 import altair as alt
 
 st.title("渠道销售分析数据看板")
 
-# 假设读取CSV或数据库数据
+st.markdown("""
+### 📘 指标说明
+- **UV**：独立访客数
+- **PV**：页面浏览量
+- **点击数**：访客点击行为
+- **订单数**：产生下单的用户数
+- **GMV**：成交总金额
+- **成本（cost）**：该渠道广告或投放消耗
+- **毛利（gross_profit）**：GMV × 毛利率（假设已提供）
+- **ROI**：GMV / 成本，衡量每单位成本产生的销售额
+- **全段ROI**：GMV / (成本 + 毛利)，综合考虑利润负担后的产出
+- **CVR**：转化率 = 订单数 / 点击数
+""")
+
+# 读取数据
 df = pd.read_csv("channel_daily_data.csv", parse_dates=['date'])
 
 # 筛选时间范围
@@ -16,10 +29,11 @@ df_filtered = df[(df['date'] >= pd.to_datetime(start_date)) & (df['date'] <= pd.
 # 聚合渠道指标（含SKU维度）
 channel_sku_summary = df_filtered.groupby(['channel', 'product_id', 'product_name']).agg({
     'uv': 'sum', 'pv': 'sum', 'gmv': 'sum', 'cost': 'sum',
-    'orders': 'sum', 'clicks': 'sum', 'impressions': 'sum'
+    'orders': 'sum', 'clicks': 'sum', 'impressions': 'sum', 'gross_profit': 'sum'
 }).reset_index()
 channel_sku_summary['转化率(CVR)'] = channel_sku_summary['orders'] / channel_sku_summary['clicks']
 channel_sku_summary['ROI'] = channel_sku_summary['gmv'] / channel_sku_summary['cost']
+channel_sku_summary['全段ROI'] = channel_sku_summary['gmv'] / (channel_sku_summary['cost'] + channel_sku_summary['gross_profit'])
 
 st.subheader("各渠道-SKU维度汇总指标")
 st.dataframe(channel_sku_summary)
@@ -32,13 +46,20 @@ df_daily = df_filtered[df_filtered['channel'] == selected_channel].groupby('date
 }).reset_index()
 df_daily['ROI'] = df_daily['gmv'] / df_daily['cost']
 
-df_melted = df_daily.melt(id_vars='date', value_vars=['uv', 'gmv', 'ROI'], var_name='指标', value_name='值')
+# 可选加入“全段ROI”趋势
+if 'gross_profit' in df_filtered.columns:
+    daily_profit = df_filtered[df_filtered['channel'] == selected_channel].groupby('date')['gross_profit'].sum().reset_index()
+    df_daily = df_daily.merge(daily_profit, on='date', how='left')
+    df_daily['全段ROI'] = df_daily['gmv'] / (df_daily['cost'] + df_daily['gross_profit'])
+
+melt_cols = ['uv', 'gmv', 'ROI'] + (['全段ROI'] if '全段ROI' in df_daily else [])
+df_melted = df_daily.melt(id_vars='date', value_vars=melt_cols, var_name='指标', value_name='值')
 chart = alt.Chart(df_melted).mark_line().encode(
     x='date:T', y='值:Q', color='指标:N', tooltip=['date:T', '指标:N', '值:Q']
 ).properties(title=f"每日趋势 - {selected_channel}", width=700)
 st.altair_chart(chart, use_container_width=True)
 
-# ROI 边际效应分析（ROI 随费用变化）
+# ROI 边际效应分析
 st.subheader("边际ROI分析")
 channel_cost_roi = df_filtered.groupby(['channel', 'date']).agg({'cost': 'sum', 'gmv': 'sum'}).reset_index()
 channel_cost_roi['ROI'] = channel_cost_roi['gmv'] / channel_cost_roi['cost']
@@ -63,11 +84,11 @@ st.dataframe(top10)
 st.subheader("渠道GMV占比")
 channel_summary = df_filtered.groupby('channel').agg({
     'uv': 'sum', 'pv': 'sum', 'gmv': 'sum', 'cost': 'sum',
-    'orders': 'sum', 'clicks': 'sum', 'impressions': 'sum'
+    'orders': 'sum', 'clicks': 'sum', 'impressions': 'sum', 'gross_profit': 'sum'
 }).reset_index()
 channel_summary['转化率(CVR)'] = channel_summary['orders'] / channel_summary['clicks']
 channel_summary['ROI'] = channel_summary['gmv'] / channel_summary['cost']
-channel_summary['全段ROI'] = channel_summary['gmv'] / (channel_summary['cost'] + df_filtered['gross_profit'].sum())
+channel_summary['全段ROI'] = channel_summary['gmv'] / (channel_summary['cost'] + channel_summary['gross_profit'])
 channel_summary['GMV占比'] = channel_summary['gmv'] / channel_summary['gmv'].sum()
 
 pie_chart = alt.Chart(channel_summary).mark_arc().encode(
@@ -95,7 +116,6 @@ cost_merged = channel_cost_alert.merge(cost_mean, on='channel')
 cost_merged['异常程度'] = cost_merged['cost'] / cost_merged['mean_cost']
 cost_alerts = cost_merged.sort_values(by='异常程度', ascending=False).head(5)
 
-# 添加归因和建议
 cost_alerts['归因分析'] = "可能因高频投放、无效点击或预算外推"
 cost_alerts['优化建议'] = "建议复查投放时间、屏蔽低质受众、压缩预算"
 
