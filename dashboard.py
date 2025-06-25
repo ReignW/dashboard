@@ -1,7 +1,7 @@
 
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.express as px
 
 st.title("渠道销售分析数据看板")
 
@@ -44,12 +44,8 @@ df_daily = df_filtered[df_filtered['channel'] == selected_channel].groupby('date
 }).reset_index()
 df_daily['ROI'] = df_daily['gmv'] / df_daily['cost']
 
-fig, ax = plt.subplots()
-ax.plot(df_daily['date'], df_daily['uv'], label='UV')
-ax.plot(df_daily['date'], df_daily['gmv'], label='GMV')
-ax.plot(df_daily['date'], df_daily['ROI'], label='ROI')
-ax.legend()
-st.pyplot(fig)
+fig = px.line(df_daily, x='date', y=['uv', 'gmv', 'ROI'], title=f"每日趋势 - {selected_channel}")
+st.plotly_chart(fig)
 
 # Top10 ROI 产品
 st.subheader("Top10 ROI产品")
@@ -63,9 +59,8 @@ st.dataframe(top10)
 
 # GMV 占比图
 st.subheader("渠道GMV占比")
-fig2, ax2 = plt.subplots()
-ax2.pie(channel_summary['GMV占比'], labels=channel_summary['channel'], autopct='%1.1f%%')
-st.pyplot(fig2)
+fig2 = px.pie(channel_summary, values='GMV占比', names='channel', title='渠道GMV占比')
+st.plotly_chart(fig2)
 
 # 拓展功能：渠道+品类组合分析
 df_filtered['category'] = df_filtered['product_name'].apply(lambda x: x.split("_")[0] if '_' in x else 'Unknown')
