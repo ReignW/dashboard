@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -162,8 +163,8 @@ def export_pdf():
     pdf.cell(0, 10, f"Lowest Retention Group: {summary['Retention'].idxmin()}", ln=True)
     pdf.cell(0, 10, f"T-Test p-value (A vs B): {p_val:.5f}", ln=True)
 
-    pdf.output(pdf_bytes)
-    pdf_bytes.seek(0)
+    pdf_bytes = pdf.output(dest='S').encode('latin1')
+    
 
     st.download_button(
         label="📄 Download PDF Report",
