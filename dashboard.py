@@ -112,4 +112,5 @@ with col5:
 
 st.plotly_chart(plot_bootstrap(), use_container_width=True)
 
-st.info("你可以上传 CSV 文件、调整转化逻辑、添加多指标分析，进一步扩
+st.info("你可以上传 CSV 文件、调整转化逻辑、添加多指标分析，进一步扩展这个看板。")
+
