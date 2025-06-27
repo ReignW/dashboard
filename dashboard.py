@@ -1,124 +1,116 @@
-import streamlit as st
+import dash
+import dash_bootstrap_components as dbc
+from dash import dcc, html
+import numpy as np
 import pandas as pd
-import altair as alt
+from scipy.stats import norm, beta
+import plotly.graph_objs as go
 
-st.title("渠道销售分析数据看板")
+# ------------------------------
+# 📦 模拟数据（A/B 每日数据）
+# ------------------------------
+np.random.seed(42)
+days = pd.date_range("2024-01-01", periods=14)
+data = pd.DataFrame({
+    "date": np.repeat(days, 2),
+    "group": ["A", "B"] * len(days),
+    "conversions": np.random.binomial(n=500, p=[0.10, 0.12] * len(days)),
+    "visitors": 500
+})
+pivot = data.pivot(index="date", columns="group", values="conversions")
 
-st.markdown("""
-### 📘 指标说明
-- **UV**：独立访客数
-- **PV**：页面浏览量
-- **点击数**：访客点击行为
-- **订单数**：产生下单的用户数
-- **GMV**：成交总金额
-- **成本（cost）**：该渠道广告或投放消耗
-- **毛利（gross_profit）**：GMV × 毛利率（假设已提供）
-- **ROI**：GMV / 成本，衡量每单位成本产生的销售额
-- **全段ROI**：GMV / (成本 + 毛利)，综合考虑利润负担后的产出
-- **CVR**：转化率 = 订单数 / 点击数
-""")
+# 汇总
+conv_a_total = data[data.group == 'A']["conversions"].sum()
+conv_b_total = data[data.group == 'B']["conversions"].sum()
+n_a = n_b = 500 * len(days)
+cr_a = conv_a_total / n_a
+cr_b = conv_b_total / n_b
+uplift = (cr_b - cr_a) / cr_a
 
-# 读取数据
-df = pd.read_csv("channel_daily_data.csv", parse_dates=['date'])
+# ------------------------------
+# 📊 Frequentist 分析
+# ------------------------------
+se = np.sqrt(cr_a * (1 - cr_a) / n_a + cr_b * (1 - cr_b) / n_b)
+z = (cr_b - cr_a) / se
+p_value = 1 - norm.cdf(abs(z))
+ci_low, ci_high = (cr_b - cr_a) - 1.96 * se, (cr_b - cr_a) + 1.96 * se
 
-# 筛选时间范围
-start_date = st.date_input("开始日期", df['date'].min())
-end_date = st.date_input("结束日期", df['date'].max())
-df_filtered = df[(df['date'] >= pd.to_datetime(start_date)) & (df['date'] <= pd.to_datetime(end_date))]
+# ------------------------------
+# 🔁 Bootstrap Uplift CI
+# ------------------------------
+bootstrap_diff = []
+for _ in range(5000):
+    bs_a = np.random.binomial(1, cr_a, n_a)
+    bs_b = np.random.binomial(1, cr_b, n_b)
+    uplift_bs = (np.mean(bs_b) - np.mean(bs_a))
+    bootstrap_diff.append(uplift_bs)
+boot_low, boot_high = np.percentile(bootstrap_diff, [2.5, 97.5])
 
-# 聚合渠道指标（含SKU维度）
-channel_sku_summary = df_filtered.groupby(['channel', 'product_id', 'product_name']).agg({
-    'uv': 'sum', 'pv': 'sum', 'gmv': 'sum', 'cost': 'sum',
-    'orders': 'sum', 'clicks': 'sum', 'impressions': 'sum', 'gross_profit': 'sum'
-}).reset_index()
-channel_sku_summary['转化率(CVR)'] = channel_sku_summary['orders'] / channel_sku_summary['clicks']
-channel_sku_summary['ROI'] = channel_sku_summary['gmv'] / channel_sku_summary['cost']
-channel_sku_summary['全段ROI'] = channel_sku_summary['gmv'] / (channel_sku_summary['cost'] + channel_sku_summary['gross_profit'])
+# ------------------------------
+# 🧠 Bayesian 后验分布
+# ------------------------------
+posterior_a = beta(conv_a_total + 1, n_a - conv_a_total + 1)
+posterior_b = beta(conv_b_total + 1, n_b - conv_b_total + 1)
+x = np.linspace(0.05, 0.2, 500)
+posterior_trace = go.Figure()
+posterior_trace.add_trace(go.Scatter(x=x, y=posterior_a.pdf(x), name="Group A Posterior"))
+posterior_trace.add_trace(go.Scatter(x=x, y=posterior_b.pdf(x), name="Group B Posterior"))
+posterior_trace.update_layout(title="🧠 Bayesian Posterior Distributions", height=400)
 
-st.subheader("各渠道-SKU维度汇总指标")
-st.dataframe(channel_sku_summary)
+# ------------------------------
+# 📈 时间趋势图
+# ------------------------------
+trend_fig = go.Figure()
+trend_fig.add_trace(go.Scatter(x=days, y=pivot["A"] / 500, name="Group A", mode="lines+markers"))
+trend_fig.add_trace(go.Scatter(x=days, y=pivot["B"] / 500, name="Group B", mode="lines+markers"))
+trend_fig.update_layout(title="📆 Daily Conversion Trend", height=400)
 
-# 趋势图：每日UV、GMV、ROI per 渠道
-st.subheader("每日趋势")
-selected_channel = st.selectbox("选择渠道查看趋势", df['channel'].unique())
-df_daily = df_filtered[df_filtered['channel'] == selected_channel].groupby('date').agg({
-    'uv': 'sum', 'gmv': 'sum', 'cost': 'sum'
-}).reset_index()
-df_daily['ROI'] = df_daily['gmv'] / df_daily['cost']
+# ------------------------------
+# 🚀 App Layout
+# ------------------------------
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE])
 
-# 可选加入“全段ROI”趋势
-if 'gross_profit' in df_filtered.columns:
-    daily_profit = df_filtered[df_filtered['channel'] == selected_channel].groupby('date')['gross_profit'].sum().reset_index()
-    df_daily = df_daily.merge(daily_profit, on='date', how='left')
-    df_daily['全段ROI'] = df_daily['gmv'] / (df_daily['cost'] + df_daily['gross_profit'])
+app.layout = dbc.Container([
+    html.H2("📊 A/B Test Pro Dashboard", className="text-center text-info my-4"),
 
-melt_cols = ['uv', 'gmv', 'ROI'] + (['全段ROI'] if '全段ROI' in df_daily else [])
-df_melted = df_daily.melt(id_vars='date', value_vars=melt_cols, var_name='指标', value_name='值')
-chart = alt.Chart(df_melted).mark_line().encode(
-    x='date:T', y='值:Q', color='指标:N', tooltip=['date:T', '指标:N', '值:Q']
-).properties(title=f"每日趋势 - {selected_channel}", width=700)
-st.altair_chart(chart, use_container_width=True)
+    dbc.Row([
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H4("Group A", className="text-info"),
+                html.P(f"CR: {cr_a:.2%}"),
+                html.P(f"Conversions: {conv_a_total} / {n_a}")
+            ])
+        ], color="dark", inverse=True), width=4),
 
-# ROI 边际效应分析
-st.subheader("边际ROI分析")
-channel_cost_roi = df_filtered.groupby(['channel', 'date']).agg({'cost': 'sum', 'gmv': 'sum'}).reset_index()
-channel_cost_roi['ROI'] = channel_cost_roi['gmv'] / channel_cost_roi['cost']
-selected_marginal_channel = st.selectbox("选择渠道分析ROI边际变化", df['channel'].unique())
-marginal_df = channel_cost_roi[channel_cost_roi['channel'] == selected_marginal_channel]
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H4("Group B", className="text-danger"),
+                html.P(f"CR: {cr_b:.2%}"),
+                html.P(f"Conversions: {conv_b_total} / {n_b}")
+            ])
+        ], color="dark", inverse=True), width=4),
 
-marginal_chart = alt.Chart(marginal_df).mark_circle(size=80).encode(
-    x='cost:Q', y='ROI:Q', tooltip=['date:T', 'cost:Q', 'ROI:Q']
-).properties(title=f"{selected_marginal_channel} 渠道 ROI vs 成本 (边际效应)", width=700)
-st.altair_chart(marginal_chart, use_container_width=True)
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H4("Results", className="text-warning"),
+                html.P(f"Uplift: {uplift:.2%}"),
+                html.P(f"Z-score: {z:.2f}"),
+                html.P(f"P-value: {p_value:.4f}"),
+                html.P(f"95% CI: [{ci_low:.2%}, {ci_high:.2%}]"),
+                html.P(f"Bootstrap CI: [{boot_low:.2%}, {boot_high:.2%}]"),
+            ])
+        ], color="secondary", inverse=True), width=4)
+    ], className="mb-4"),
 
-# Top10 ROI 产品
-st.subheader("Top10 ROI产品")
-product_roi = df_filtered.groupby(['product_id', 'product_name']).agg({
-    'gmv': 'sum', 'cost': 'sum'
-}).reset_index()
-product_roi['ROI'] = product_roi['gmv'] / product_roi['cost']
-top10 = product_roi.sort_values(by='ROI', ascending=False).head(10)
-st.dataframe(top10)
+    dbc.Row([
+        dbc.Col(dcc.Graph(figure=trend_fig), width=6),
+        dbc.Col(dcc.Graph(figure=posterior_trace), width=6)
+    ]),
 
-# 渠道 GMV 占比
-st.subheader("渠道GMV占比")
-channel_summary = df_filtered.groupby('channel').agg({
-    'uv': 'sum', 'pv': 'sum', 'gmv': 'sum', 'cost': 'sum',
-    'orders': 'sum', 'clicks': 'sum', 'impressions': 'sum', 'gross_profit': 'sum'
-}).reset_index()
-channel_summary['转化率(CVR)'] = channel_summary['orders'] / channel_summary['clicks']
-channel_summary['ROI'] = channel_summary['gmv'] / channel_summary['cost']
-channel_summary['全段ROI'] = channel_summary['gmv'] / (channel_summary['cost'] + channel_summary['gross_profit'])
-channel_summary['GMV占比'] = channel_summary['gmv'] / channel_summary['gmv'].sum()
+    dbc.Row([
+        dbc.Col(dbc.Alert("✨ 数据使用模拟生成，仅作展示。可扩展上传 CSV 或接入数据库。", color="info"), width=12)
+    ])
+], fluid=True)
 
-pie_chart = alt.Chart(channel_summary).mark_arc().encode(
-    theta='GMV占比:Q', color='channel:N', tooltip=['channel', 'GMV占比']
-)
-st.altair_chart(pie_chart, use_container_width=True)
-
-# 首推渠道选择器
-st.subheader("首推渠道设定")
-primary_channel = st.selectbox("请选择要主推的渠道：", channel_summary['channel'].unique())
-st.success(f"当前主推渠道设定为：{primary_channel}")
-
-# 渠道+品类组合分析
-df_filtered['category'] = df_filtered['product_name'].apply(lambda x: x.split("_")[0] if '_' in x else 'Unknown')
-combo = df_filtered.groupby(['channel', 'category']).agg({'gmv': 'sum', 'cost': 'sum'}).reset_index()
-combo['ROI'] = combo['gmv'] / combo['cost']
-st.subheader("渠道+品类组合 ROI 分析")
-st.dataframe(combo.sort_values(by='ROI', ascending=False))
-
-# 费用异常归因与建议
-st.subheader("费用异常归因与优化建议")
-channel_cost_alert = df_filtered.groupby(['date', 'channel'])['cost'].sum().reset_index()
-cost_mean = channel_cost_alert.groupby('channel')['cost'].mean().reset_index(name='mean_cost')
-cost_merged = channel_cost_alert.merge(cost_mean, on='channel')
-cost_merged['异常程度'] = cost_merged['cost'] / cost_merged['mean_cost']
-cost_alerts = cost_merged.sort_values(by='异常程度', ascending=False).head(5)
-
-cost_alerts['归因分析'] = "可能因高频投放、无效点击或预算外推"
-cost_alerts['优化建议'] = "建议复查投放时间、屏蔽低质受众、压缩预算"
-
-st.dataframe(cost_alerts)
-
-st.caption("数据来源：营销数据平台 | 开发：数据团队")
+if __name__ == '__main__':
+    app.run_server(debug=True)
