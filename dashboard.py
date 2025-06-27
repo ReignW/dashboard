@@ -134,3 +134,73 @@ best_arpu = summary["ARPU"].idxmax()
 st.markdown(f"- **Highest Conversion Rate:** Group {best_group} ({summary.loc[best_group, 'CR']:.2%})")
 st.markdown(f"- **Highest ARPU:** Group {best_arpu} (${summary.loc[best_arpu, 'ARPU']:.2f})")
 st.markdown(f"- **Lowest Retention:** Group {summary['Retention'].idxmin()} ({summary['Retention'].min():.2%})")
+
+
+# ---------------------
+# PDF Export Section
+# ---------------------
+from fpdf import FPDF
+import matplotlib.pyplot as plt
+import tempfile
+import os
+
+st.subheader("📥 Export Summary Report as PDF")
+
+
+def export_pdf():
+    from io import BytesIO
+    pdf_bytes = BytesIO()
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, "A/B/n Test Summary Report", ln=True, align='C')
+
+    pdf.set_font("Arial", "", 12)
+    pdf.ln(10)
+    pdf.cell(0, 10, f"Best Conversion Rate Group: {best_group}", ln=True)
+    pdf.cell(0, 10, f"Best ARPU Group: {best_arpu}", ln=True)
+    pdf.cell(0, 10, f"Lowest Retention Group: {summary['Retention'].idxmin()}", ln=True)
+    pdf.cell(0, 10, f"T-Test p-value (A vs B): {p_val:.5f}", ln=True)
+
+    pdf.output(pdf_bytes)
+    pdf_bytes.seek(0)
+
+    st.download_button(
+        label="📄 Download PDF Report",
+        data=pdf_bytes,
+        file_name="ab_test_summary.pdf",
+        mime="application/pdf"
+    )
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, "A/B/n Test Summary Report", ln=True, align='C')
+
+    pdf.set_font("Arial", "", 12)
+    pdf.ln(10)
+    pdf.cell(0, 10, f"Best Conversion Rate Group: {best_group}", ln=True)
+    pdf.cell(0, 10, f"Best ARPU Group: {best_arpu}", ln=True)
+    pdf.cell(0, 10, f"Lowest Retention Group: {summary['Retention'].idxmin()}", ln=True)
+    pdf.cell(0, 10, f"T-Test p-value (A vs B): {p_val:.5f}", ln=True)
+
+    # Save a CR chart to image
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cr_fig = px.line(df, x="date", y="cr", color="group", title="Daily CR")
+        cr_path = os.path.join(tmpdir, "cr_plot.png")
+        cr_fig.write_image(cr_path, format="png", width=800, height=400)
+        pdf.image(cr_path, x=10, y=80, w=190)
+
+        # Export ARPU chart
+        arpu_fig = px.line(df, x="date", y="arpu", color="group", title="Daily ARPU")
+        arpu_path = os.path.join(tmpdir, "arpu_plot.png")
+        arpu_fig.write_image(arpu_path, format="png", width=800, height=400)
+        pdf.add_page()
+        pdf.image(arpu_path, x=10, y=20, w=190)
+
+        output_path = os.path.join(tmpdir, "ab_test_report.pdf")
+        pdf.output(output_path)
+        with open(output_path, "rb") as f:
+            st.download_button("📄 Download PDF Report", f, file_name="ab_test_summary.pdf")
+
+export_pdf()
