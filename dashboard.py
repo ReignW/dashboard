@@ -2,139 +2,136 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 import plotly.express as px
-from scipy.stats import norm, beta, ttest_ind
+import plotly.graph_objects as go
+from scipy.stats import beta, ttest_ind, norm
 
-# Simulate A/B test data
+# ---------------------
+# Simulate multi-group data
+# ---------------------
 np.random.seed(42)
-days = pd.date_range("2024-01-01", periods=14)
-df = pd.DataFrame({
-    "date": np.tile(days, 2),
-    "group": ["A"] * 14 + ["B"] * 14,
-    "visitors": 500,
-    "conversions": np.concatenate([
-        np.random.binomial(500, 0.10, 14),
-        np.random.binomial(500, 0.12, 14)
-    ])
-})
-df["conversion_rate"] = df["conversions"] / df["visitors"]
+groups = ['A', 'B', 'C', 'D']
+days = pd.date_range("2024-01-01", periods=30)
+data = []
 
-# Summary statistics
+for group in groups:
+    base_cr = 0.10 + 0.02 * groups.index(group)  # Slightly increasing CR
+    base_arpu = 5 + 2 * groups.index(group)
+    for date in days:
+        visitors = np.random.randint(450, 550)
+        conversions = np.random.binomial(visitors, base_cr)
+        revenue = conversions * np.random.normal(base_arpu, 1)
+        retained = np.random.binomial(conversions, 0.3 + 0.05 * groups.index(group))
+        data.append([date, group, visitors, conversions, revenue, retained])
+
+df = pd.DataFrame(data, columns=["date", "group", "visitors", "conversions", "revenue", "retained"])
+df["cr"] = df["conversions"] / df["visitors"]
+df["arpu"] = df["revenue"] / df["visitors"]
+df["retention_rate"] = df["retained"] / df["conversions"].replace(0, np.nan)
+
+# ---------------------
+# Page config
+# ---------------------
+st.set_page_config(layout="wide", page_title="Pro A/B/n Test Dashboard")
+st.title("📊 Pro-Level A/B/n Test Analysis Dashboard")
+st.caption("Simulated data comparing Groups A, B, C, and D over 30 days. Includes CR, ARPU, Retention, Bayesian, Bootstrap, and more.")
+
+# ---------------------
+# Summary cards
+# ---------------------
+st.subheader("🧮 Summary Metrics")
 summary = df.groupby("group").agg(
+    total_visitors=("visitors", "sum"),
     total_conversions=("conversions", "sum"),
-    total_visitors=("visitors", "sum")
+    total_revenue=("revenue", "sum"),
+    total_retained=("retained", "sum")
 )
-summary["conversion_rate"] = summary["total_conversions"] / summary["total_visitors"]
+summary["CR"] = summary["total_conversions"] / summary["total_visitors"]
+summary["ARPU"] = summary["total_revenue"] / summary["total_visitors"]
+summary["Retention"] = summary["total_retained"] / summary["total_conversions"]
 
-# Frequentist confidence interval
-cr_diff = summary.loc["B", "conversion_rate"] - summary.loc["A", "conversion_rate"]
-p_a = summary.loc["A", "conversion_rate"]
-p_b = summary.loc["B", "conversion_rate"]
-n = summary["total_visitors"].iloc[0]
-se = np.sqrt(p_a * (1 - p_a) / n + p_b * (1 - p_b) / n)
-z_score = cr_diff / se
-p_value = 1 - norm.cdf(abs(z_score))
-ci_low, ci_high = cr_diff - 1.96 * se, cr_diff + 1.96 * se
+st.dataframe(summary.style.format("{:.2%}", subset=["CR", "Retention"]).format("${:.2f}", subset=["ARPU"]))
 
-# Bootstrap uplift distribution
-def bootstrap_diff(a, b, n=5000):
-    return [np.mean(np.random.choice(b, size=len(b), replace=True)) -
-            np.mean(np.random.choice(a, size=len(a), replace=True))
-            for _ in range(n)]
+# ---------------------
+# Conversion Rate Over Time
+# ---------------------
+st.subheader("📈 Daily Conversion Rate by Group")
+fig_cr = px.line(df, x="date", y="cr", color="group", markers=True)
+st.plotly_chart(fig_cr, use_container_width=True)
 
-boot_diffs = bootstrap_diff(df[df.group == "A"]["conversion_rate"],
-                            df[df.group == "B"]["conversion_rate"])
-boot_ci = np.percentile(boot_diffs, [2.5, 97.5])
+# ---------------------
+# ARPU Over Time
+# ---------------------
+st.subheader("💰 Daily ARPU by Group")
+fig_arpu = px.line(df, x="date", y="arpu", color="group", markers=True)
+st.plotly_chart(fig_arpu, use_container_width=True)
 
-# Bayesian inference
-a_conv = summary.loc["A", "total_conversions"]
-a_total = summary.loc["A", "total_visitors"]
-b_conv = summary.loc["B", "total_conversions"]
-b_total = summary.loc["B", "total_visitors"]
+# ---------------------
+# Retention Over Time
+# ---------------------
+st.subheader("🔁 Daily Retention Rate by Group")
+fig_ret = px.line(df, x="date", y="retention_rate", color="group", markers=True)
+st.plotly_chart(fig_ret, use_container_width=True)
+
+# ---------------------
+# Boxplots
+# ---------------------
+st.subheader("📦 Conversion Rate Distribution")
+fig_box = px.box(df, x="group", y="cr")
+st.plotly_chart(fig_box, use_container_width=True)
+
+# ---------------------
+# Bayesian Posterior (Group A vs others)
+# ---------------------
+st.subheader("🧠 Bayesian Posterior: Group A vs Others")
+posterior_x = np.linspace(0.05, 0.25, 500)
+fig_bayes = go.Figure()
+a_conv = df[df.group == 'A']["conversions"].sum()
+a_total = df[df.group == 'A']["visitors"].sum()
 posterior_a = beta(a_conv + 1, a_total - a_conv + 1)
-posterior_b = beta(b_conv + 1, b_total - b_conv + 1)
-x = np.linspace(0.05, 0.2, 500)
+fig_bayes.add_trace(go.Scatter(x=posterior_x, y=posterior_a.pdf(posterior_x), name="A"))
 
-# Layout
-st.set_page_config(layout="wide", page_title="Advanced A/B Test Dashboard")
+for group in ['B', 'C', 'D']:
+    g_conv = df[df.group == group]["conversions"].sum()
+    g_total = df[df.group == group]["visitors"].sum()
+    posterior = beta(g_conv + 1, g_total - g_conv + 1)
+    fig_bayes.add_trace(go.Scatter(x=posterior_x, y=posterior.pdf(posterior_x), name=group))
 
-st.title("🔬 Advanced A/B Test Analysis Dashboard")
-st.markdown("This dashboard visualizes A/B testing results using frequentist, bootstrap, and Bayesian methods.")
+st.plotly_chart(fig_bayes, use_container_width=True)
 
-# Summary
-col1, col2, col3 = st.columns(3)
-col1.metric("Group A CR", f"{p_a:.2%}")
-col2.metric("Group B CR", f"{p_b:.2%}", delta=f"{cr_diff:.2%}")
-col3.metric("p-value (Z test)", f"{p_value:.5f}")
+# ---------------------
+# Bootstrap uplift A vs B
+# ---------------------
+st.subheader("🎲 Bootstrap Uplift: A vs B")
+a_cr = df[df.group == "A"]["cr"]
+b_cr = df[df.group == "B"]["cr"]
+boot_diffs = [np.mean(np.random.choice(b_cr, size=len(b_cr), replace=True)) -
+              np.mean(np.random.choice(a_cr, size=len(a_cr), replace=True))
+              for _ in range(3000)]
+ci = np.percentile(boot_diffs, [2.5, 97.5])
+fig_boot = px.histogram(boot_diffs, nbins=50, title="Bootstrap Uplift Distribution (B - A)")
+fig_boot.add_vline(x=ci[0], line=dict(color="red", dash="dash"))
+fig_boot.add_vline(x=ci[1], line=dict(color="green", dash="dash"))
+st.plotly_chart(fig_boot, use_container_width=True)
 
-st.markdown("#### Null Hypothesis (H₀): CR_A = CR_B")
-st.markdown("#### Alternative Hypothesis (H₁): CR_A ≠ CR_B")
-
-# Chart 1 - Daily CR trend
-st.subheader("1. Daily Conversion Rate Trend")
-fig1 = px.line(df, x="date", y="conversion_rate", color="group", markers=True)
-st.plotly_chart(fig1, use_container_width=True)
-
-# Chart 2 - Overall CR bar
-st.subheader("2. Overall Conversion Rate Comparison")
-fig2 = px.bar(summary.reset_index(), x="group", y="conversion_rate", text_auto=True)
-st.plotly_chart(fig2, use_container_width=True)
-
-# Chart 3 - Bayesian Posterior
-st.subheader("3. Bayesian Posterior Distributions")
-fig3 = go.Figure()
-fig3.add_trace(go.Scatter(x=x, y=posterior_a.pdf(x), name="Posterior A"))
-fig3.add_trace(go.Scatter(x=x, y=posterior_b.pdf(x), name="Posterior B"))
-fig3.update_layout(title="Beta Posterior Distributions")
-st.plotly_chart(fig3, use_container_width=True)
-
-# Chart 4 - Bootstrap Uplift Histogram
-st.subheader("4. Bootstrap Uplift Distribution")
-fig4 = px.histogram(boot_diffs, nbins=50)
-fig4.add_vline(x=boot_ci[0], line=dict(color="red", dash="dash"))
-fig4.add_vline(x=boot_ci[1], line=dict(color="green", dash="dash"))
-st.plotly_chart(fig4, use_container_width=True)
-
-# Chart 5 - Boxplot of CR
-st.subheader("5. Conversion Rate Distribution by Group")
-fig5 = px.box(df, x="group", y="conversion_rate")
-st.plotly_chart(fig5, use_container_width=True)
-
-# Chart 6 - Rolling Average
-st.subheader("6. 3-Day Rolling Conversion Rate")
-df["rolling_cr"] = df.groupby("group")["conversion_rate"].transform(lambda x: x.rolling(3, 1).mean())
-fig6 = px.line(df, x="date", y="rolling_cr", color="group")
-st.plotly_chart(fig6, use_container_width=True)
-
-# Chart 7 - Scatter by Conversions
-st.subheader("7. CR Scatter Sized by Conversion Volume")
-fig7 = px.scatter(df, x="date", y="conversion_rate", color="group", size="conversions")
-st.plotly_chart(fig7, use_container_width=True)
-
-# Chart 8 - Cumulative CR
-st.subheader("8. Cumulative Conversion Rate Over Time")
-df["cumulative_conv"] = df.groupby("group")["conversions"].cumsum()
-df["cumulative_vis"] = df.groupby("group")["visitors"].cumsum()
-df["cumulative_cr"] = df["cumulative_conv"] / df["cumulative_vis"]
-fig8 = px.line(df, x="date", y="cumulative_cr", color="group")
-st.plotly_chart(fig8, use_container_width=True)
-
-# Chart 9 - Error bars
-st.subheader("9. Mean CR with Standard Deviation")
-means = df.groupby("group")["conversion_rate"].mean()
-stds = df.groupby("group")["conversion_rate"].std()
-fig9 = go.Figure(data=[go.Bar(x=["A", "B"], y=means, error_y=dict(type='data', array=stds))])
-st.plotly_chart(fig9, use_container_width=True)
-
-# Chart 10 - Welch's t-test
-st.subheader("10. Welch's t-test")
-t_stat, pval = ttest_ind(df[df.group=="A"]["conversion_rate"], df[df.group=="B"]["conversion_rate"], equal_var=False)
-st.metric("t-test p-value", f"{pval:.5f}")
-if pval < 0.05:
-    st.success("Statistically significant difference detected.")
+# ---------------------
+# Welch’s t-test A vs B
+# ---------------------
+st.subheader("🧪 Welch’s T-Test (A vs B)")
+t_stat, p_val = ttest_ind(a_cr, b_cr, equal_var=False)
+st.write(f"**T-Statistic:** {t_stat:.3f}")
+st.write(f"**P-Value:** {p_val:.5f}")
+if p_val < 0.05:
+    st.success("Result: Statistically significant difference.")
 else:
-    st.warning("No statistically significant difference.")
+    st.warning("Result: No significant difference.")
 
-st.markdown("---")
-st.caption("All data shown here is simulated.")
+# ---------------------
+# Auto Summary
+# ---------------------
+st.subheader("📄 Automated Summary")
+best_group = summary["CR"].idxmax()
+best_arpu = summary["ARPU"].idxmax()
+st.markdown(f"- **Highest Conversion Rate:** Group {best_group} ({summary.loc[best_group, 'CR']:.2%})")
+st.markdown(f"- **Highest ARPU:** Group {best_arpu} (${summary.loc[best_arpu, 'ARPU']:.2f})")
+st.markdown(f"- **Lowest Retention:** Group {summary['Retention'].idxmin()} ({summary['Retention'].min():.2%})")
